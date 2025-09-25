@@ -2,6 +2,7 @@ import puppeteer from 'puppeteer';
 import dotenv from 'dotenv';
 import fs from 'fs';
 import {stringify} from 'csv-stringify/sync';
+import path from 'path';
 dotenv.config();
 
 const getDynamicHTML = async (query, pageCount) => {
@@ -13,14 +14,19 @@ const getDynamicHTML = async (query, pageCount) => {
 
         // 2. Open a new page.
         const puppeteerPage = await browser.newPage();
+        await puppeteerPage.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3');
+
 
         await puppeteerPage.goto('https://www.threads.com/login?hl=ko');
         await puppeteerPage.waitForSelector('input[placeholder="사용자 이름, 전화번호 또는 이메일 주소"]');
         await puppeteerPage.type('input[placeholder="사용자 이름, 전화번호 또는 이메일 주소"]', process.env.INS_ID);
         await puppeteerPage.waitForSelector('input[placeholder="비밀번호"]');
         await puppeteerPage.type('input[placeholder="비밀번호"]', process.env.INS_PW);
-        //await puppeteerPage.waitForSelector('form div[role="button"]');
+        //await puppeteerPage.waitForSelector('form div[role="button"]:not([disabled])');
         await Promise.all([puppeteerPage.click('form div[role="button"]'), puppeteerPage.waitForNavigation({waitUntil: 'networkidle2'})]);
+
+        console.log('login successful');
+        console.log('begin scroll...');
 
         // 3. Navigate to the URL and wait for the network to be idle.
         // 'networkidle2' is a good signal that dynamic content has likely finished loading.
@@ -36,17 +42,19 @@ const getDynamicHTML = async (query, pageCount) => {
         
         const itemSelector = 'div[aria-label="칼럼 본문"] > div > div > div > div > div > div > div > div';
         await puppeteerPage.waitForSelector(itemSelector);
+
+        let crawlResult = [];
+        let prevRecords = 0;
         try{
             let lastHeight = await puppeteerPage.evaluate('document.body.scrollHeight');
             
             for(let i = 0; i < pageCount; i++){
-                let prevRecords = await puppeteerPage.$$eval(itemSelector, items => items.length);
                 console.log(prevRecords);
                 
                 await puppeteerPage.evaluate('window.scrollTo(0, document.body.scrollHeight)');
 
                 //await puppeteerPage.waitForNetworkIdle({idleTime: 3000});
-
+                
                 await puppeteerPage.waitForFunction(
                     (prevRecords, itemSelector) => {
                         const newRecords = document.querySelectorAll(itemSelector).length;
@@ -57,13 +65,29 @@ const getDynamicHTML = async (query, pageCount) => {
                     prevRecords,
                     itemSelector
                 );
+                
+                await puppeteerPage.waitForSelector(itemSelector);
+                const newResults = await puppeteerPage.$$eval(itemSelector, (elements) => 
+                    {
+                        return elements;
+                    }
+                );
 
+                newResults.slice(prevRecords);
+                newResults = newResults.map((el) => ({
+                    text: el.innerText,
+                    firstLink: el.querySelector('a')?.href,
+                }));
+
+                crawlResult.push(newResults);
+                
                 let newHeight = await puppeteerPage.evaluate('document.body.scrollHeight');
-
+                
                 // if(newHeight === lastHeight){
                 //     break;
                 // }
                 console.log('scrolling...');
+                prevRecords = await puppeteerPage.$$eval(itemSelector, items => items.length);
             }
         }catch(error){
             console.error('An error occurred during scrolling:', error);
@@ -71,24 +95,24 @@ const getDynamicHTML = async (query, pageCount) => {
         }
         await puppeteerPage.waitForSelector(itemSelector);
 
-        // 5. Extract the data from the page.
-        // page.$$eval runs `document.querySelectorAll` in the browser and passes the
-        // found elements to a callback function.
-        const searchResults = await puppeteerPage.$$eval(itemSelector, (elements) =>
-            // We map over the elements to extract the data we need.
-            // This callback runs in the browser's context, not in Node.js.
-            elements.map((el) => ({
-                // Extract the plain text content of the element.
-                text: el.innerText,
-                // You could also extract other things, like links:
-                firstLink: el.querySelector('a')?.href,
-            }))
-        );
+        // // 5. Extract the data from the page.
+        // // page.$$eval runs `document.querySelectorAll` in the browser and passes the
+        // // found elements to a callback function.
+        // const searchResults = await puppeteerPage.$$eval(itemSelector, (elements) =>
+        //     // We map over the elements to extract the data we need.
+        //     // This callback runs in the browser's context, not in Node.js.
+        //     elements.map((el) => ({
+        //         // Extract the plain text content of the element.
+        //         text: el.innerText,
+        //         // You could also extract other things, like links:
+        //         firstLink: el.querySelector('a')?.href,
+        //     }))
+        // );
 
-        console.log(`Found ${searchResults.length} search results.`);
-        console.log(searchResults);
+        // console.log(`Found ${searchResults.length} search results.`);
+        // console.log(searchResults);
 
-        return searchResults;
+        return crawlResult;
 
     } catch (err) {
         console.error("An error occurred during scraping:", err);
@@ -116,11 +140,19 @@ const writeCSV = (data) => {
         header: true
     });
 
-    fs.writeFileSync('./output.csv', output, 'utf-8');
+    const __dir = path.resolve('..', 'output');
+    if(!fs.existsSync(__dir)){
+        fs.mkdirSync(__dir);
+    }
+
+    const currentTime = new Date().toISOString().replace(/:/g, '-');
+    const fileName = `output.${currentTime}.csv`;
+    const filePath = path.join(__dir, fileName);
+    fs.writeFileSync(filePath, output, 'utf-8');
 }
 
 const main = async () => {
-    const data = await getDynamicHTML('빕스', 3);
+    const data = await getDynamicHTML('개발', 5);
     writeCSV(data);
 }
 
