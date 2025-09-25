@@ -1,33 +1,80 @@
-const puppeteer = require('puppeteer');
+import puppeteer from 'puppeteer';
+import dotenv from 'dotenv';
+import fs from 'fs';
+import {stringify} from 'csv-stringify/sync';
+dotenv.config();
 
-const getDynamicHTML = async () => {
+const getDynamicHTML = async (query, pageCount) => {
     let browser; // Define browser outside try...catch to access it in the finally block
     try {
         // 1. Launch a headless browser instance.
         // 'headless: "new"' uses the modern headless mode which is more capable.
-        browser = await puppeteer.launch({ headless: "new" });
+        browser = await puppeteer.launch({ headless: false });
 
         // 2. Open a new page.
-        const page = await browser.newPage();
+        const puppeteerPage = await browser.newPage();
+
+        await puppeteerPage.goto('https://www.threads.com/login?hl=ko');
+        await puppeteerPage.waitForSelector('input[placeholder="사용자 이름, 전화번호 또는 이메일 주소"]');
+        await puppeteerPage.type('input[placeholder="사용자 이름, 전화번호 또는 이메일 주소"]', process.env.INS_ID);
+        await puppeteerPage.waitForSelector('input[placeholder="비밀번호"]');
+        await puppeteerPage.type('input[placeholder="비밀번호"]', process.env.INS_PW);
+        //await puppeteerPage.waitForSelector('form div[role="button"]');
+        await Promise.all([puppeteerPage.click('form div[role="button"]'), puppeteerPage.waitForNavigation({waitUntil: 'networkidle2'})]);
 
         // 3. Navigate to the URL and wait for the network to be idle.
         // 'networkidle2' is a good signal that dynamic content has likely finished loading.
-        const url = 'https://www.threads.com/search?q=%EB%B9%95%EC%8A%A4&serp_type=tags&hl=ko';
-        await page.goto(url, {
-            waitUntil: 'networkidle2',
+        const url = `https://www.threads.com/search?q=${query}&serp_type=tags&hl=ko`;
+        await puppeteerPage.goto(url, {
+            waitUntil: 'networkidle2'
         });
 
         // 4. Wait for the target content to appear on the page.
         // Modern sites like Threads use auto-generated, changing class names.
         // It's more reliable to select elements by stable attributes like ARIA roles.
         // Here, we wait for a div that acts as a list item in a feed.
-        const itemSelector = 'div[class="x78zum5 xdt5ytf"]';
-        await page.waitForSelector(itemSelector);
+        
+        const itemSelector = 'div[id="barcelona-page-layout"] > div > div > div > div > div > div > div > div > div > div';
+        await puppeteerPage.waitForSelector(itemSelector);
+        try{
+            let lastHeight = await puppeteerPage.evaluate('document.body.scrollHeight');
+            
+            for(let i = 0; i < pageCount; i++){
+                let prevRecords = await puppeteerPage.$$eval(itemSelector, items => items.length);
+                console.log(prevRecords);
+                
+                await puppeteerPage.evaluate('window.scrollTo(0, document.body.scrollHeight)');
+
+                //await puppeteerPage.waitForNetworkIdle({idleTime: 3000});
+
+                await puppeteerPage.waitForFunction(
+                    (prevRecords, itemSelector) => {
+                        const newRecords = document.querySelectorAll(itemSelector).length;
+                        console.log(`prev: ${prevRecords}, new: ${newRecords}`)
+                        return newRecords > prevRecords;
+                    },
+                    {timeout: 30000},
+                    prevRecords,
+                    itemSelector
+                );
+
+                let newHeight = await puppeteerPage.evaluate('document.body.scrollHeight');
+
+                // if(newHeight === lastHeight){
+                //     break;
+                // }
+                console.log('scrolling...');
+            }
+        }catch(error){
+            console.error('An error occurred during scrolling:', error);
+            throw new Error('Problem with scrolling');
+        }
+        await puppeteerPage.waitForSelector(itemSelector);
 
         // 5. Extract the data from the page.
         // page.$$eval runs `document.querySelectorAll` in the browser and passes the
         // found elements to a callback function.
-        const searchResults = await page.$$eval(itemSelector, (elements) =>
+        const searchResults = await puppeteerPage.$$eval(itemSelector, (elements) =>
             // We map over the elements to extract the data we need.
             // This callback runs in the browser's context, not in Node.js.
             elements.map((el) => ({
@@ -53,4 +100,21 @@ const getDynamicHTML = async () => {
     }
 };
 
-getDynamicHTML();
+const writeCSV = async (data) => {
+    stringify(data, {header: true}, (err, output) => {
+        if(err){
+            console.error(err.message);
+            return;
+        }
+        fs.writeFile('output.csv', output, 'utf8', (err) => {
+            throw new Error(err.message);
+        });
+    });
+}
+
+const main = async () => {
+    const data = await getDynamicHTML('빕스', 3);
+    //writeCSV(data);
+}
+
+main();
