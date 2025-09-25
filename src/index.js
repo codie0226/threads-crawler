@@ -34,7 +34,7 @@ const getDynamicHTML = async (query, pageCount) => {
         // It's more reliable to select elements by stable attributes like ARIA roles.
         // Here, we wait for a div that acts as a list item in a feed.
         
-        const itemSelector = 'div[id="barcelona-page-layout"] > div > div > div > div > div > div > div > div > div > div';
+        const itemSelector = 'div[aria-label="칼럼 본문"] > div > div > div > div > div > div > div > div';
         await puppeteerPage.waitForSelector(itemSelector);
         try{
             let lastHeight = await puppeteerPage.evaluate('document.body.scrollHeight');
@@ -100,21 +100,28 @@ const getDynamicHTML = async (query, pageCount) => {
     }
 };
 
-const writeCSV = async (data) => {
-    stringify(data, {header: true}, (err, output) => {
-        if(err){
-            console.error(err.message);
-            return;
-        }
-        fs.writeFile('output.csv', output, 'utf8', (err) => {
-            throw new Error(err.message);
-        });
+const writeCSV = (data) => {
+    const writeData = data.map((elements) => {
+        const textContent = elements.text;
+        const fixedContent = textContent.split('\n');
+        const user = fixedContent[0];
+        const title = fixedContent[1];
+        const date = fixedContent[2];
+        const content = fixedContent.slice(3).join('\n');
+        const fixedLink = elements.firstLink;
+        return {user, title, date, content, link: fixedLink};
     });
+
+    const output = stringify(writeData, {
+        header: true
+    });
+
+    fs.writeFileSync('./output.csv', output, 'utf-8');
 }
 
 const main = async () => {
     const data = await getDynamicHTML('빕스', 3);
-    //writeCSV(data);
+    writeCSV(data);
 }
 
 main();
