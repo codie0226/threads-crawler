@@ -10,20 +10,25 @@ const getDynamicHTML = async (query, pageCount) => {
     try {
         // 1. Launch a headless browser instance.
         // 'headless: "new"' uses the modern headless mode which is more capable.
-        browser = await puppeteer.launch({ headless: false });
+        browser = await puppeteer.launch({ headless: true });
 
         // 2. Open a new page.
         const puppeteerPage = await browser.newPage();
+        await puppeteerPage.setViewport({ width: 1920, height: 1080 });
         await puppeteerPage.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3');
 
 
         await puppeteerPage.goto('https://www.threads.com/login?hl=ko');
         await puppeteerPage.waitForSelector('input[placeholder="사용자 이름, 전화번호 또는 이메일 주소"]');
-        await puppeteerPage.type('input[placeholder="사용자 이름, 전화번호 또는 이메일 주소"]', process.env.INS_ID);
+        await puppeteerPage.type('input[placeholder="사용자 이름, 전화번호 또는 이메일 주소"]', process.env.INS_ID, {delay: 100});
         await puppeteerPage.waitForSelector('input[placeholder="비밀번호"]');
-        await puppeteerPage.type('input[placeholder="비밀번호"]', process.env.INS_PW);
+        await puppeteerPage.type('input[placeholder="비밀번호"]', process.env.INS_PW, {delay: 110});
         //await puppeteerPage.waitForSelector('form div[role="button"]:not([disabled])');
-        await Promise.all([puppeteerPage.click('form div[role="button"]'), puppeteerPage.waitForNavigation({waitUntil: 'networkidle2'})]);
+        await Promise.all([
+            puppeteerPage.click('form div[role="button"]'), 
+            puppeteerPage.waitForNavigation({waitUntil: 'networkidle2'})
+        ])
+        .catch(console.error('login failed. try again later'));
 
         console.log('login successful');
         console.log('begin scroll...');
@@ -68,18 +73,17 @@ const getDynamicHTML = async (query, pageCount) => {
                 
                 await puppeteerPage.waitForSelector(itemSelector);
                 const newResults = await puppeteerPage.$$eval(itemSelector, (elements) => 
-                    {
-                        return elements;
-                    }
+                    elements.map((el) => ({
+                        text: el.innerText,
+                        firstLink: el.querySelector('a')?.href,
+                    
+                    }))
                 );
 
                 newResults.slice(prevRecords);
-                newResults = newResults.map((el) => ({
-                    text: el.innerText,
-                    firstLink: el.querySelector('a')?.href,
-                }));
-
-                crawlResult.push(newResults);
+                for(let j = 0; j < newResults.length; j++){
+                    crawlResult.push(newResults[j]);
+                }
                 
                 let newHeight = await puppeteerPage.evaluate('document.body.scrollHeight');
                 
@@ -111,7 +115,7 @@ const getDynamicHTML = async (query, pageCount) => {
 
         // console.log(`Found ${searchResults.length} search results.`);
         // console.log(searchResults);
-
+        console.log(crawlResult);
         return crawlResult;
 
     } catch (err) {
@@ -139,8 +143,9 @@ const writeCSV = (data) => {
     const output = stringify(writeData, {
         header: true
     });
+    console.log(`${output.length} ready to write`);
 
-    const __dir = path.resolve('..', 'output');
+    const __dir = path.resolve('output');
     if(!fs.existsSync(__dir)){
         fs.mkdirSync(__dir);
     }
@@ -148,7 +153,11 @@ const writeCSV = (data) => {
     const currentTime = new Date().toISOString().replace(/:/g, '-');
     const fileName = `output.${currentTime}.csv`;
     const filePath = path.join(__dir, fileName);
-    fs.writeFileSync(filePath, output, 'utf-8');
+    try{
+        fs.writeFileSync(filePath, output, 'utf-8');
+    }catch(err){
+        throw new Error(err.message);
+    }
 }
 
 const main = async () => {
